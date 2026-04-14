@@ -95,6 +95,59 @@ function createRewardClient(): FakeClient {
     };
 }
 
+function createCharmRewardClient(): FakeClient {
+    const sentPackets: SentPacket[] = [];
+    const character: any = {
+        name: 'Gamma',
+        class: 'Paladin',
+        gender: 'male',
+        level: 20,
+        xp: 0,
+        gold: 0,
+        materials: [],
+        inventoryGears: [],
+        equippedGears: [
+            {
+                gearID: 1177,
+                tier: 0,
+                runes: [15, 0, 0],
+                colors: [0, 0]
+            }
+        ],
+        OwnedDyes: [],
+        pets: [],
+        activePet: {
+            typeID: 0,
+            special_id: 0
+        }
+    };
+
+    return {
+        token: 3,
+        userId: null,
+        currentLevel: 'TutorialDungeon',
+        levelInstanceId: '',
+        currentRoomId: 1,
+        playerSpawned: true,
+        clientEntID: 1003,
+        character,
+        characters: [character],
+        authoritativeMaxHp: 100,
+        authoritativeCurrentHp: 100,
+        processedRewardSources: new Set<string>(),
+        pendingLoot: new Map<number, any>(),
+        knownEntityIds: new Set<number>(),
+        entities: new Map<number, any>(),
+        sentPackets,
+        send(id: number, payload: Buffer) {
+            sentPackets.push({ id, payload: Buffer.from(payload) });
+        },
+        sendBitBuffer(id: number, payload: BitBuffer) {
+            sentPackets.push({ id, payload: payload.toBuffer() });
+        }
+    };
+}
+
 function createConsumableClient(): FakeClient {
     const sentPackets: SentPacket[] = [];
     const character: any = {
@@ -223,6 +276,27 @@ async function testRewardHandlerAppliesActivePetBonuses(): Promise<void> {
     assert.equal(client.character.xp, 20, 'gold-find pet should not alter XP rewards');
 }
 
+async function testRewardHandlerAppliesEquippedCharmFindBonuses(): Promise<void> {
+    const client = createCharmRewardClient();
+    GlobalState.sessionsByToken.set(client.token, client as never);
+
+    const sourceId = 9200;
+    addLevelEntity(client, {
+        id: sourceId,
+        name: 'IntroGoblin',
+        isPlayer: false,
+        team: 2,
+        x: 120,
+        y: 220
+    });
+    setContributors(getClientLevelScope(client as never), sourceId, ['gamma']);
+
+    await RewardHandler.handleGrantReward(client as never, buildGrantRewardPayload(sourceId, 100, 20));
+
+    const loot = Array.from(client.pendingLoot.values())[0];
+    assert.equal(loot?.gold, 103, 'equipped gold-find charm should increase gold rewards by its rune bonus');
+}
+
 async function testPetFoodUsageLevelsAndUpdatesActivePet(): Promise<void> {
     const client = createConsumableClient();
 
@@ -257,6 +331,7 @@ async function main(): Promise<void> {
 
     try {
         await testRewardHandlerAppliesActivePetBonuses();
+        await testRewardHandlerAppliesEquippedCharmFindBonuses();
         await testPetFoodUsageLevelsAndUpdatesActivePet();
         console.log('pet_system_regression: ok');
     } finally {

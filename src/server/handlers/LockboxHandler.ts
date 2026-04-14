@@ -4,6 +4,7 @@ import { PetConfig } from '../core/PetConfig';
 import { JsonAdapter } from '../database/JsonAdapter';
 import { BitBuffer } from '../network/protocol/bitBuffer';
 import { BitReader } from '../network/protocol/bitReader';
+import { CharacterSync } from '../utils/CharacterSync';
 import { upsertInventoryGear } from '../utils/GearInventory';
 import { PetHandler } from './PetHandler';
 import { RewardHandler } from './RewardHandler';
@@ -194,6 +195,7 @@ export class LockboxHandler {
         const sigilReward = 50 + Math.floor(Math.random() * 101);
         client.character.SilverSigils = Number(client.character.SilverSigils ?? 0) + sigilReward;
         LockboxHandler.sendRoyalSigilReward(client, sigilReward);
+        CharacterSync.sendPlayerDataRefresh(client);
 
         await LockboxHandler.applyReward(client, reward);
         await LockboxHandler.saveCharacter(client);
