@@ -15,6 +15,7 @@ import { getEquippedGearGoldFind } from '../utils/GearGoldBonuses';
 import { getActivePotionBonuses } from '../utils/ConsumableState';
 import { normalizeCharacterMaterials } from '../utils/MaterialInventory';
 import { PetHandler } from './PetHandler';
+import { EntityState } from '../core/Entity';
 
 const db = new JsonAdapter();
 
@@ -486,6 +487,51 @@ export class RewardHandler {
             && rewardClass !== 'HealthOnly';
     }
 
+    private static isEntityDefeated(entity: any): boolean {
+        if (!entity || typeof entity !== 'object') {
+            return false;
+        }
+
+        if (Boolean(entity.dead) || Number(entity.entState ?? EntityState.ACTIVE) === EntityState.DEAD) {
+            return true;
+        }
+
+        const hp = Number(entity.hp ?? NaN);
+        if (Number.isFinite(hp) && hp <= 0) {
+            return true;
+        }
+
+        const maxHp = Math.max(0, Number(entity.maxHp ?? 0));
+        const healthDelta = Number(entity.healthDelta ?? entity.health_delta ?? NaN);
+        return maxHp > 0 && Number.isFinite(healthDelta) && healthDelta <= -maxHp;
+    }
+
+    private static isRewardSourceDefeated(client: Client, sourceId: number, sourceEntity: any): boolean {
+        if (RewardHandler.isEntityDefeated(sourceEntity)) {
+            return true;
+        }
+
+        const scopeKey = getClientLevelScope(client);
+        const scopedEntity = scopeKey ? GlobalState.levelEntities.get(scopeKey)?.get(sourceId) : null;
+        if (RewardHandler.isEntityDefeated(scopedEntity)) {
+            return true;
+        }
+
+        return sourceId > 0 && scopeKey
+            ? GlobalState.entityLastRewardNonces.has(`${scopeKey}:${sourceId}`)
+            : false;
+    }
+
+    private static isClientDefeated(client: Client): boolean {
+        if (Number(client.authoritativeCurrentHp ?? 1) <= 0) {
+            return true;
+        }
+
+        const playerEntity = client.entities.get(client.clientEntID) ??
+            (client.currentLevel ? GlobalState.levelEntities.get(getClientLevelScope(client))?.get(client.clientEntID) : null);
+        return RewardHandler.isEntityDefeated(playerEntity);
+    }
+
     private static isHardDungeon(levelName: string | null | undefined): boolean {
         return /Hard$/i.test(String(levelName ?? '').trim());
     }
@@ -533,28 +579,29 @@ export class RewardHandler {
         return true;
     }
 
-    private static collectOwnedGearIds(client: Client): Set<number> {
-        const owned = new Set<number>();
+    private static collectOwnedGearTierKeys(client: Client): Set<string> {
+        const owned = new Set<string>();
+        const addGear = (gearId: unknown, tier: unknown): void => {
+            const normalizedGearId = Number(gearId ?? 0);
+            if (!Number.isFinite(normalizedGearId) || normalizedGearId <= 0) {
+                return;
+            }
+            const normalizedTier = Math.max(0, Math.min(2, Math.round(Number(tier ?? 0) || 0)));
+            for (let t = 0; t <= normalizedTier; t++) {
+                owned.add(GameData.buildGearTierKey(normalizedGearId, t));
+            }
+        };
 
         for (const rawGear of Array.isArray(client.character?.inventoryGears) ? client.character.inventoryGears : []) {
-            const gearId = Number(rawGear?.gearID ?? 0);
-            if (gearId > 0) {
-                owned.add(gearId);
-            }
+            addGear(rawGear?.gearID, rawGear?.tier);
         }
 
         for (const rawGear of Array.isArray(client.character?.equippedGears) ? client.character.equippedGears : []) {
-            const gearId = Number(rawGear?.gearID ?? 0);
-            if (gearId > 0) {
-                owned.add(gearId);
-            }
+            addGear(rawGear?.gearID, rawGear?.tier);
         }
 
         for (const reward of client.pendingLoot.values()) {
-            const gearId = Number(reward?.gear ?? 0);
-            if (gearId > 0) {
-                owned.add(gearId);
-            }
+            addGear(reward?.gear, reward?.tier ?? 0);
         }
 
         return owned;
@@ -592,27 +639,45 @@ export class RewardHandler {
         const entType = entName ? GameData.getEntType(entName) : null;
         const entLevel = Math.max(1, Number(entType?.Level ?? 1));
         const playerClass = String(client.character?.class ?? '');
-        const ownedGearIds = RewardHandler.collectOwnedGearIds(client);
+        const ownedGearTierKeys = RewardHandler.collectOwnedGearTierKeys(client);
         const realm = String(entType?.Realm ?? RewardHandler.DUNGEON_REALM_MAP[client.currentLevel] ?? '');
         const itemLootAllowedByClass = RewardHandler.rewardClassAllowsItemLoot(entType);
         const isDungeonLevel = RewardHandler.isDungeonLevel(client.currentLevel);
         const isDungeonEnemyReward = isDungeonLevel && Boolean(entName) && Boolean(entType) && sourceEntity && !sourceEntity.isPlayer;
         const entRank = String(entType?.EntRank ?? 'Minion');
+        const isIntroEnemy = entName.startsWith('Intro');
+        const isChainsEnemy = entName.startsWith('Chains');
+        const isLargeEnemy = entRank === 'Lieutenant' || entRank === 'MiniBoss' || entRank === 'Boss';
+        const allowItemDrop = !isChainsEnemy && (!isIntroEnemy || isLargeEnemy);
+        const rewardClass = String(entType?.RewardClass ?? '');
+        const sourceDefeated = RewardHandler.isRewardSourceDefeated(client, reward.sourceId, sourceEntity);
+        const blockLiveSourceForDefeatedClient = isDungeonEnemyReward &&
+            !sourceDefeated &&
+            RewardHandler.isClientDefeated(client);
+        const fixedItemSourceAllowed = rewardClass !== 'FixedItem' ||
+            reward.dropItem ||
+            reward.dropGear ||
+            sourceDefeated;
+        const shouldApplyDropTables = isDungeonEnemyReward &&
+            allowItemDrop &&
+            itemLootAllowedByClass &&
+            fixedItemSourceAllowed &&
+            !blockLiveSourceForDefeatedClient;
         const baseMaterialChance = RewardHandler.MATERIAL_DROP_CHANCE_BY_RANK[entRank] ?? RewardHandler.MATERIAL_DROP_CHANCE_BY_RANK.Minion;
         const packetMaterialMultiplier = RewardHandler.sanitizeDropMultiplier(reward.gearMultiplier);
         const packetItemMultiplier = RewardHandler.sanitizeDropMultiplier(reward.itemMultiplier);
         const materialFindRate = petBonuses.craftFind + charmBonuses.craftFind + potionBonuses.craftFind;
         const itemFindRate = petBonuses.itemFind + charmBonuses.itemFind + potionBonuses.itemFind;
         const goldFindRate = petBonuses.goldFind + charmBonuses.goldFind + gearGoldFind + potionBonuses.goldFind;
-        const shouldRollMaterial = isDungeonLevel && Boolean(realm) && itemLootAllowedByClass && (reward.dropMaterial || isDungeonEnemyReward);
-        const shouldRollGear = isDungeonLevel && itemLootAllowedByClass && (reward.dropGear || isDungeonEnemyReward);
+        const shouldRollMaterial = shouldApplyDropTables && Boolean(realm);
+        const shouldRollGear = shouldApplyDropTables;
         const materialChance = shouldRollMaterial
             ? RewardHandler.resolveMaterialDropChance(entType, reward)
             : 0;
         const gearChance = shouldRollGear
             ? RewardHandler.resolveGearDropChance(entType, reward)
             : 0;
-        const dyeDebug = isDungeonLevel
+        const dyeDebug = shouldApplyDropTables
             ? RewardHandler.resolveDyeDropRarityDebug(client, entType)
             : {
                 eligible: false,
@@ -626,11 +691,6 @@ export class RewardHandler {
             };
 
         // Küçük Intro düşmanlar (Minion rank) ve Chains entitylerinden eşya düşmez
-        const isIntroEnemy = entName.startsWith('Intro');
-        const isChainsEnemy = entName.startsWith('Chains');
-        const isLargeEnemy = entRank === 'Lieutenant' || entRank === 'MiniBoss' || entRank === 'Boss';
-        const allowItemDrop = !isChainsEnemy && (!isIntroEnemy || isLargeEnemy);
-
         let materialRoll: number | null = null;
         let materialRarity: 'M' | 'R' | 'L' | null = null;
         let materialRarityRoll: number | null = null;
@@ -654,11 +714,18 @@ export class RewardHandler {
         if (allowItemDrop && gearChance > 0) {
             gearRoll = Math.random();
             if (gearRoll < gearChance) {
-                gearId = GameData.getGearIdForEntity(entName, playerClass, ownedGearIds, client.currentLevel);
                 const tierResult = RewardHandler.resolveGearTierDebug(client, entRank);
                 gearTier = tierResult.tier;
                 gearTierRoll = tierResult.tierRoll;
                 gearTierWeights = tierResult.tierWeights;
+                gearId = GameData.getGearIdForEntity(
+                    entName,
+                    playerClass,
+                    undefined,
+                    client.currentLevel,
+                    gearTier,
+                    ownedGearTierKeys
+                );
             }
         }
         let goldBeforeFind = gold;
@@ -677,13 +744,16 @@ export class RewardHandler {
                 character: client.character?.name ?? '',
                 level: client.currentLevel,
                 sourceId: reward.sourceId,
+                receiverId: reward.receiverId,
                 entName,
                 entRank,
-                rewardClass: String(entType?.RewardClass ?? ''),
+                rewardClass,
                 playerClass,
                 realm,
                 allowItemDrop,
                 itemLootAllowedByClass,
+                sourceDefeated,
+                blockLiveSourceForDefeatedClient,
                 rolls: {
                     material: {
                         attempted: shouldRollMaterial,
@@ -709,6 +779,8 @@ export class RewardHandler {
                         packetMultiplier: packetItemMultiplier,
                         packetRawMultiplier: reward.itemMultiplier,
                         packetDropItem: reward.dropItem,
+                        packetDropGear: reward.dropGear,
+                        packetDropMaterial: reward.dropMaterial,
                         petFind: petBonuses.itemFind,
                         charmFind: charmBonuses.itemFind,
                         potionFind: potionBonuses.itemFind,
@@ -721,6 +793,7 @@ export class RewardHandler {
                         rarityTotalChances: RewardHandler.buildTierTotalChances(gearChance, gearTierWeights),
                         rarityRoll: gearTierRoll,
                         tier: gearId > 0 ? gearTier : null,
+                        rolledTier: gearTierRoll !== null ? gearTier : null,
                         gearId
                     },
                     dye: {
