@@ -55,7 +55,7 @@ export interface DiscordPartyJoinResult {
 export class SocialHandler {
     private static readonly MAX_PARTY_SIZE = 4;
     private static readonly FRIEND_REQUEST_PROMPT_TTL_MS = 5 * 60_000;
-    private static readonly TELEPORT_COMMAND_PREFIX = '/teleport:';
+    private static readonly TELEPORT_COMMAND_PREFIXES = ['/teleport:', 'teleport:'];
     private static readonly TELEPORT_COST_GOLD = 20_000;
     private static readonly DREAD_TELEPORT_COST_GOLD = 40_000;
     private static readonly TELEPORT_DESTINATIONS: Map<
@@ -167,11 +167,12 @@ export class SocialHandler {
 
     private static parseTeleportCommand(message: string): { slug: string; dread: boolean } | null {
         const normalized = String(message ?? '').trim().toLowerCase();
-        if (!normalized.startsWith(SocialHandler.TELEPORT_COMMAND_PREFIX)) {
+        const prefix = SocialHandler.TELEPORT_COMMAND_PREFIXES.find((entry) => normalized.startsWith(entry));
+        if (!prefix) {
             return null;
         }
 
-        const rawSlug = normalized.slice(SocialHandler.TELEPORT_COMMAND_PREFIX.length).trim();
+        const rawSlug = normalized.slice(prefix.length).trim();
         if (!rawSlug) {
             return { slug: '', dread: false };
         }

@@ -197,6 +197,20 @@ async function testUnlockedStoryDestinationCanTeleport(): Promise<void> {
     assert.equal(GlobalState.pendingTeleports.get(client.token)?.targetLevel, 'Castle');
 }
 
+async function testSlashStrippedTeleportCommandStillWorks(): Promise<void> {
+    const client = createFakeClient(25_000, {
+        [String(MissionID.HeadToValhaven)]: {
+            state: 2,
+            currCount: 1
+        }
+    });
+
+    await runTeleportCommand(client, 'teleport:valhaven');
+
+    assert.equal(client.character.gold, 5_000, 'slash-stripped teleport command should spend gold');
+    assert.equal(GlobalState.pendingTeleports.get(client.token)?.targetLevel, 'JadeCity');
+}
+
 async function testLockedDreadDestinationRequiresDreadfoldUnlock(): Promise<void> {
     const client = createFakeClient(100_000);
 
@@ -250,6 +264,9 @@ async function main(): Promise<void> {
 
         GlobalState.pendingTeleports.clear();
         await testUnlockedStoryDestinationCanTeleport();
+
+        GlobalState.pendingTeleports.clear();
+        await testSlashStrippedTeleportCommandStillWorks();
 
         GlobalState.pendingTeleports.clear();
         await testLockedDreadDestinationRequiresDreadfoldUnlock();
