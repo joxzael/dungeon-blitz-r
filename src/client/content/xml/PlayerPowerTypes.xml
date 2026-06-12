@@ -20357,7 +20357,7 @@
 		<CastTime>100,100,100,100,100,100</CastTime>
 		<RecoverTime>400</RecoverTime>
 		<CoolDownTime>0</CoolDownTime>
-		<ManaCost>30</ManaCost>
+		<ManaCost>25</ManaCost>
 		<BaseDamageMult>1.43</BaseDamageMult>
 		<ProcModifier>1</ProcModifier>
 		<DamageType>Ice</DamageType>

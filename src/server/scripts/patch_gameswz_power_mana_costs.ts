@@ -11,6 +11,7 @@ const XML_DIR = path.resolve(__dirname, "..", "..", "client", "content", "xml");
 const CBQ_DIR = path.resolve(__dirname, "..", "..", "client", "content", "localhost", "p", "cbq");
 
 const POWER_MANA_COSTS = new Map<string, string>([
+  ["IceSpike10", "25"],
   ["PainBender10", "25"],
 ]);
 
